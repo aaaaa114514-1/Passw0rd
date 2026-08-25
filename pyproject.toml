@@ -1,0 +1,6 @@
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.pyinstaller]
+# Build configuration is intentionally kept in the packaging command for clarity.

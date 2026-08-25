@@ -1,0 +1,38 @@
+# Python environments and bytecode
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Test, type-check, and coverage artifacts
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+test-tmp/
+*-smoke*/
+*-data/
+
+# PyInstaller build and distribution artifacts
+build/
+dist/
+publish/
+*.spec
+
+# Local application data and secrets
+vault.db
+vault_config.json
+ui_preferences.json
+*.new
+
+# IDE and operating-system files
+.vscode/
+.idea/
+*.swp
+*~
+Thumbs.db
+Desktop.ini
+.DS_Store
