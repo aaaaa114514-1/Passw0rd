@@ -160,4 +160,4 @@ This project is intended for local Windows use. Before using it as the only copy
 
 ## License
 
-No license has been selected yet. Add an explicit license before redistributing the project.
+This project is licensed under the [MIT License](LICENSE). You may use, copy, modify, merge, publish, distribute, sublicense, and sell copies of the software, provided that the copyright notice and license text are included in copies or substantial portions of the software.
