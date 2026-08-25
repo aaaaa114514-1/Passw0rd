@@ -36,3 +36,7 @@ ui_preferences.json
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# Agent files
+Agent.md
+WORKLOG.md
