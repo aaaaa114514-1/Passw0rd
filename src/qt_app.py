@@ -13,8 +13,8 @@ def resource_path(relative_path: str) -> Path:
 APP_ICON_PNG = resource_path("icon/89076139-ccdd-471f-9de5-416ae31e3a16.png")
 APP_ICON_ICO = resource_path("icon/favicon.ico")
 
-from PySide6.QtCore import QEvent, QPoint, QPropertyAnimation, QEasingCurve, Qt, QTimer
-from PySide6.QtGui import QAction, QColor, QFont, QIcon, QPainter, QPixmap
+from PySide6.QtCore import QEvent, QPoint, QPropertyAnimation, QEasingCurve, Qt, QTimer, QUrl
+from PySide6.QtGui import QAction, QColor, QDesktopServices, QFont, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (QApplication, QDialog, QFileDialog, QFormLayout, QFrame, QHBoxLayout,
     QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QPushButton, QSplitter, QStackedWidget,
     QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget)
@@ -74,19 +74,23 @@ class Toast(QFrame):
 
 class AccountDialog(QDialog):
     def __init__(self, parent, entry=None):
-        super().__init__(parent); self.host=parent; self.entry=entry or VaultEntry(id="",title=""); t=parent.t; self.setWindowTitle(t("new_account") if not entry else t("edit_account")); self.setMinimumWidth(525)
+        super().__init__(parent); self.host=parent; self.entry=entry or VaultEntry(id="",title=""); self.saved_entry=None; t=parent.t; self.setWindowTitle(t("new_account") if not entry else t("edit_account")); self.setMinimumWidth(525)
         root=QVBoxLayout(self); root.setContentsMargins(28,26,28,26); root.setSpacing(12); root.addWidget(QLabel(t("new_account") if not entry else t("edit_account"),objectName="dialogTitle"))
         self.fields={}; form=QFormLayout(); form.setSpacing(10)
         labels=[("Name *","title"),("Username","username"),("Phone","phone"),("Email","email"),("Website","url"),("Password","password"),("Category","category"),("Tags","tags")]
         for label,key in labels:
             box=QLineEdit(getattr(self.entry,key)); box.setPlaceholderText(label); box.setClearButtonEnabled(True)
-            if key=="password": box.setEchoMode(QLineEdit.EchoMode.Password)
+            if key=="password": self.host.add_password_toggle(box)
             self.fields[key]=box; form.addRow(label,box)
-        root.addLayout(form); root.addWidget(QLabel(t("notes"),objectName="fieldLabel")); self.notes=QTextEdit(self.entry.notes); self.notes.setFixedHeight(92); root.addWidget(self.notes); self.error=QLabel(objectName="error"); root.addWidget(self.error)
-        actions=QHBoxLayout(); actions.addStretch(); cancel=QPushButton(t("cancel")); cancel.clicked.connect(self.reject); save=QPushButton(t("save")); save.setObjectName("primary"); save.clicked.connect(self.accept); actions.addWidget(cancel); actions.addWidget(save); root.addLayout(actions)
+        root.addLayout(form); root.addWidget(QLabel(t("notes"),objectName="fieldLabel")); self.notes=QTextEdit(self.entry.notes); self.notes.setFixedHeight(92); self.notes.installEventFilter(self); root.addWidget(self.notes); self.error=QLabel(objectName="error"); root.addWidget(self.error)
+        actions=QHBoxLayout(); actions.addStretch(); cancel=QPushButton(t("cancel")); cancel.clicked.connect(self.reject); save=QPushButton(t("save")); save.setObjectName("primary"); save.clicked.connect(self.accept); actions.addWidget(cancel); actions.addWidget(save); root.addLayout(actions); save.setDefault(True); save.setAutoDefault(True)
     def value(self): return VaultEntry(id=self.entry.id,created_at=self.entry.created_at,updated_at=self.entry.updated_at,notes=self.notes.toPlainText(),**{k:v.text() for k,v in self.fields.items()})
+    def eventFilter(self,watched,event):
+        if watched is self.notes and event.type()==QEvent.Type.KeyPress and event.key() in (Qt.Key.Key_Return,Qt.Key.Key_Enter) and not event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+            self.accept();return True
+        return super().eventFilter(watched,event)
     def accept(self):
-        try: self.host.vault.save_entry(self.value()); super().accept()
+        try: self.saved_entry=self.host.vault.save_entry(self.value()); super().accept()
         except ValidationError as exc: self.error.setText(str(exc))
 
 class SettingsDialog(QDialog):
@@ -131,8 +135,8 @@ class SettingsDialog(QDialog):
     def build_security(self):
         p=QWidget(); box=QVBoxLayout(p); box.setContentsMargins(28,27,28,24); box.addWidget(QLabel(self.host.t("security"),objectName="dialogTitle")); box.addWidget(QLabel(self.host.t("change"),objectName="muted")); form=QFormLayout(); self.passwords=[]
         for label in (self.host.t("current"),self.host.t("new_password"),self.host.t("confirm")):
-            field=QLineEdit(); field.setEchoMode(QLineEdit.EchoMode.Password); form.addRow(label,field); self.passwords.append(field)
-        box.addLayout(form); self.security_error=QLabel(objectName="error"); box.addWidget(self.security_error); box.addStretch(); update=QPushButton(self.host.t("update")); update.setObjectName("primary"); update.clicked.connect(self.change); box.addWidget(update); self.stack.addWidget(p)
+            field=QLineEdit(); self.host.add_password_toggle(field); form.addRow(label,field); self.passwords.append(field)
+        box.addLayout(form); self.security_error=QLabel(objectName="error"); box.addWidget(self.security_error); box.addStretch(); update=QPushButton(self.host.t("update")); update.setObjectName("primary"); update.clicked.connect(self.change); update.setDefault(True); update.setAutoDefault(True); box.addWidget(update); self.stack.addWidget(p)
     def change(self):
         current,new,confirm=[x.text() for x in self.passwords]
         if new!=confirm: self.security_error.setText("Passwords do not match." if self.host.preferences.language=="en" else "两次输入的新密码不一致。 "); return
@@ -183,13 +187,26 @@ class VaultWindow(QMainWindow):
     def backdrop(self): return Backdrop(self.preferences.background_image,self.preferences.theme)
     def clear(self):
         if self.centralWidget(): self.centralWidget().deleteLater()
+    def add_password_toggle(self, field):
+        field.setEchoMode(QLineEdit.EchoMode.Password)
+        action=QAction("◉",field)
+        field.addAction(action,QLineEdit.ActionPosition.TrailingPosition)
+        action.setToolTip("Show password" if self.preferences.language=="en" else "显示密码")
+        def toggle():
+            visible=field.echoMode()==QLineEdit.EchoMode.Password
+            field.setEchoMode(QLineEdit.EchoMode.Normal if visible else QLineEdit.EchoMode.Password)
+            action.setText("◉" if visible else "◌")
+            action.setToolTip(("Hide password" if visible else "Show password") if self.preferences.language=="en" else ("隐藏密码" if visible else "显示密码"))
+        action.triggered.connect(toggle)
+        return action
     def show_gate(self):
         self.clear(); back=self.backdrop(); layout=QVBoxLayout(back); layout.setAlignment(Qt.AlignmentFlag.AlignCenter); panel=GlassFrame(); panel.setMaximumWidth(470); p=QVBoxLayout(panel); p.setContentsMargins(38,36,38,36); p.setSpacing(12); first=not self.vault.is_initialized
         p.addWidget(QLabel("P@SSW0RD",objectName="eyebrow")); p.addWidget(QLabel(self.t("create") if first else self.t("welcome"),objectName="dialogTitle")); note=QLabel(self.t("create_note") if first else self.t("unlock_note"),objectName="muted");note.setWordWrap(True);p.addWidget(note)
-        self.gate_pass=QLineEdit();self.gate_pass.setPlaceholderText(self.t("master"));self.gate_pass.setEchoMode(QLineEdit.EchoMode.Password);p.addWidget(self.gate_pass);self.gate_confirm=None
-        if first: self.gate_confirm=QLineEdit();self.gate_confirm.setPlaceholderText(self.t("confirm"));self.gate_confirm.setEchoMode(QLineEdit.EchoMode.Password);p.addWidget(self.gate_confirm)
-        self.gate_error=QLabel(objectName="error");p.addWidget(self.gate_error);go=QPushButton(self.t("create_vault") if first else self.t("unlock"));go.setObjectName("primary");go.clicked.connect(lambda:self.unlock(first));p.addWidget(go);p.addWidget(QLabel(self.t("local"),objectName="eyebrow")); layout.addWidget(panel); self.setCentralWidget(back); self.gate_pass.returnPressed.connect(lambda:self.unlock(first));
-        if self.gate_confirm: self.gate_confirm.returnPressed.connect(lambda:self.unlock(first)); self.gate_pass.setFocus()
+        self.gate_pass=QLineEdit();self.gate_pass.setPlaceholderText(self.t("master"));self.add_password_toggle(self.gate_pass);p.addWidget(self.gate_pass);self.gate_confirm=None
+        if first: self.gate_confirm=QLineEdit();self.gate_confirm.setPlaceholderText(self.t("confirm"));self.add_password_toggle(self.gate_confirm);p.addWidget(self.gate_confirm)
+        self.gate_error=QLabel(objectName="error");p.addWidget(self.gate_error);go=QPushButton(self.t("create_vault") if first else self.t("unlock"));go.setObjectName("primary");go.clicked.connect(lambda:self.unlock(first));go.setDefault(True);go.setAutoDefault(True);p.addWidget(go);p.addWidget(QLabel(self.t("local"),objectName="eyebrow")); layout.addWidget(panel); self.setCentralWidget(back); self.gate_pass.returnPressed.connect(lambda:self.unlock(first));
+        if self.gate_confirm: self.gate_confirm.returnPressed.connect(lambda:self.unlock(first))
+        self.gate_pass.setFocus()
     def unlock(self,first):
         try:
             if first:
@@ -203,15 +220,26 @@ class VaultWindow(QMainWindow):
         theme_icon=QPushButton("☀" if self.preferences.theme=="dark" else "☾");theme_icon.setFixedWidth(42);theme_icon.setToolTip("Switch to light mode" if self.preferences.theme=="dark" else "Switch to dark mode");theme_icon.clicked.connect(self.toggle_theme);header.addWidget(theme_icon)
         for text,slot in [(self.t("settings"),self.settings),(self.t("lock"),self.lock)]: b=QPushButton(text);b.clicked.connect(slot);header.addWidget(b)
         outer.addLayout(header);glass=GlassFrame();outer.addWidget(glass,1);gl=QVBoxLayout(glass);gl.setContentsMargins(14,14,14,14);split=QSplitter();split.setChildrenCollapsible(False);split.setHandleWidth(14);split.setStyleSheet("QSplitter::handle { background: rgba(255,255,255,0.12); margin: 10px 3px; border-radius:4px; } QSplitter::handle:hover { background: rgba(56,199,255,0.55); }");gl.addWidget(split);left=QWidget();ll=QVBoxLayout(left);tools=QHBoxLayout();self.search=QLineEdit();self.search.setPlaceholderText(self.t("search"));self.search.textChanged.connect(self.refresh);tools.addWidget(self.search,1);self.category=QPushButton(self.t("categories")+"  ▾");self.category.clicked.connect(self.category_menu);tools.addWidget(self.category);new=QPushButton(self.t("new"));new.setObjectName("primary");new.clicked.connect(self.edit);tools.addWidget(new);ll.addLayout(tools)
-        table_shell=GlassFrame("tableShell");table_layout=QVBoxLayout(table_shell);table_layout.setContentsMargins(0,0,0,0);self.table=QTableWidget(0,3);self.table.setHorizontalHeaderLabels([self.t("account"),self.t("identity"),self.t("category")]);self.table.verticalHeader().hide();self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows);self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection);self.table.setFocusPolicy(Qt.FocusPolicy.NoFocus);self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers);self.table.setShowGrid(False);self.table.itemSelectionChanged.connect(self.select);self.table.horizontalHeader().setStretchLastSection(True);self.table.horizontalHeader().setSectionsClickable(True);self.table.horizontalHeader().sectionClicked.connect(self.sort_by_column);self.table.setColumnWidth(0,230);self.table.setColumnWidth(1,310);table_layout.addWidget(self.table);ll.addWidget(table_shell);split.addWidget(left);self.detail=QWidget();self.detail.setMinimumWidth(320);split.addWidget(self.detail);split.setSizes([780,350]);self.setCentralWidget(back);self.refresh();self.empty_detail()
+        table_shell=GlassFrame("tableShell");table_layout=QVBoxLayout(table_shell);table_layout.setContentsMargins(0,0,0,0);self.table=QTableWidget(0,3);self.table.setHorizontalHeaderLabels([self.t("account"),self.t("identity"),self.t("category")]);self.table.verticalHeader().hide();self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows);self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection);self.table.setFocusPolicy(Qt.FocusPolicy.StrongFocus);self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers);self.table.setShowGrid(False);self.table.itemSelectionChanged.connect(self.select);self.table.installEventFilter(self);self.table.horizontalHeader().setStretchLastSection(True);self.table.horizontalHeader().setSectionsClickable(True);self.table.horizontalHeader().sectionClicked.connect(self.sort_by_column);self.table.setColumnWidth(0,230);self.table.setColumnWidth(1,310);table_layout.addWidget(self.table);ll.addWidget(table_shell);split.addWidget(left);self.detail=QWidget();self.detail.setMinimumWidth(320);split.addWidget(self.detail);split.setSizes([780,350]);self.setCentralWidget(back);self.refresh()
     def refresh(self):
         if not self.vault.is_unlocked:return
+        selected_id=self.current
         category=self.category.text().replace("  ▾","");all_label=self.t("categories");none_label=self.t("none");self.entries={x.id:x for x in self.vault.list_entries(self.search.text())};rows=[x for x in self.entries.values() if category==all_label or (category==none_label and not x.category) or x.category==category]
         sort_values = (lambda item: item.title, lambda item: item.username or item.email or item.phone, lambda item: item.category)
         rows.sort(key=lambda item: sort_values[self.sort_column](item).casefold(), reverse=self.sort_descending)
-        self.table.setRowCount(len(rows))
+        self.table.blockSignals(True);self.table.clearContents();self.table.setRowCount(len(rows))
+        selected_row=None
         for r,x in enumerate(rows):
             for col,value in enumerate((x.title,x.username or x.email or x.phone or self.t("none"),x.category or self.t("none"))): item=QTableWidgetItem(value);item.setData(Qt.ItemDataRole.UserRole,x.id);self.table.setItem(r,col,item)
+            if x.id==selected_id:selected_row=r
+        self.table.clearSelection()
+        if selected_row is None:
+            self.current=None
+        else:
+            self.table.selectRow(selected_row)
+        self.table.blockSignals(False)
+        if self.current:self.detail_view(self.entries[self.current])
+        else:self.empty_detail()
     def sort_by_column(self, column):
         if self.sort_column == column:
             self.sort_descending = not self.sort_descending
@@ -230,11 +258,20 @@ class VaultWindow(QMainWindow):
     def set_category(self,name):self.category.setText(name+"  ▾");self.refresh()
     def select(self):
         rows=self.table.selectedItems()
-        if rows:self.current=rows[0].data(Qt.ItemDataRole.UserRole);self.detail_view(self.entries[self.current])
+        if not rows:return
+        entry_id=rows[0].data(Qt.ItemDataRole.UserRole)
+        if entry_id in self.entries:self.current=entry_id;self.detail_view(self.entries[entry_id])
+    def _dispose_layout_item(self,item):
+        widget=item.widget()
+        if widget:widget.setParent(None);widget.deleteLater();return
+        layout=item.layout()
+        if layout:
+            while layout.count():self._dispose_layout_item(layout.takeAt(0))
+            layout.deleteLater()
     def reset_detail(self):
         layout=self.detail.layout()
         if layout:
-            while layout.count(): item=layout.takeAt(0);w=item.widget();w and w.deleteLater()
+            while layout.count():self._dispose_layout_item(layout.takeAt(0))
         else:layout=QVBoxLayout(self.detail);layout.setContentsMargins(20,20,20,20);layout.setSpacing(8)
         return layout
     def empty_detail(self):
@@ -243,15 +280,28 @@ class VaultWindow(QMainWindow):
         box=self.reset_detail();box.addWidget(QLabel(self.t("details"),objectName="eyebrow"));box.addWidget(QLabel(x.title,objectName="dialogTitle"));box.addWidget(QLabel(" · ".join(filter(None,[x.category,x.tags])) or self.t("none"),objectName="muted"))
         for label,val in [("Username",x.username),("Phone",x.phone),("Email",x.email),("Website",x.url),("Password",x.password)]:
             if val:
-                card=GlassFrame("card");row=QHBoxLayout(card);left=QVBoxLayout();left.addWidget(QLabel(label.upper(),objectName="eyebrow"));shown="●"*min(max(len(val),9),20) if label=="Password" else val;left.addWidget(QLabel(shown));row.addLayout(left,1);copy=QPushButton("⧉");copy.setToolTip(label);copy.clicked.connect(lambda checked=False,v=val:self.copy(v));row.addWidget(copy);box.addWidget(card)
+                card=GlassFrame("card");row=QHBoxLayout(card);left=QVBoxLayout();left.addWidget(QLabel(label.upper(),objectName="eyebrow"));shown="●"*min(max(len(val),9),20) if label=="Password" else val;left.addWidget(QLabel(shown));row.addLayout(left,1)
+                if label=="Website":
+                    open_link=QPushButton("↗");open_link.setToolTip("Open website" if self.preferences.language=="en" else "打开网页");open_link.clicked.connect(lambda checked=False,url=val:self.open_website(url));row.addWidget(open_link)
+                copy=QPushButton("⧉");copy.setToolTip(label);copy.clicked.connect(lambda checked=False,v=val:self.copy(v));row.addWidget(copy);box.addWidget(card)
         if x.notes:box.addWidget(QLabel(self.t("notes").upper(),objectName="eyebrow"));box.addWidget(QLabel(x.notes,objectName="muted"))
         box.addStretch();actions=QHBoxLayout();edit=QPushButton(self.t("edit"));edit.clicked.connect(lambda:self.edit(x));delete=QPushButton(self.t("delete"));delete.setObjectName("danger");delete.clicked.connect(lambda:self.delete(x));actions.addWidget(edit);actions.addWidget(delete);box.addLayout(actions)
     def toast(self,message):self.toast_widget.show_message(message)
     def resizeEvent(self,event):super().resizeEvent(event);self.toast_widget.move((self.width()-self.toast_widget.width())//2,20)
     def copy(self,value):QApplication.clipboard().setText(value);self.toast(self.t("copy"))
+    def open_website(self,value):
+        url=QUrl.fromUserInput(value)
+        if url.isValid() and url.scheme():QDesktopServices.openUrl(url)
+    def eventFilter(self,watched,event):
+        if watched is getattr(self,"table",None) and event.type()==QEvent.Type.KeyPress and event.key() in (Qt.Key.Key_Up,Qt.Key.Key_Down):
+            current_row=self.table.currentRow()
+            if current_row<0:current_row=0
+            step=-1 if event.key()==Qt.Key.Key_Up else 1
+            self.table.selectRow((current_row+step)%self.table.rowCount());return True
+        return super().eventFilter(watched,event)
     def edit(self,entry=None):
         dialog=AccountDialog(self,entry)
-        if dialog.exec():self.current=dialog.value().id or self.current;self.refresh();self.toast(self.t("success"))
+        if dialog.exec():self.current=dialog.saved_entry.id;self.refresh();self.toast(self.t("success"))
     def delete(self,x):
         if QMessageBox.question(self,self.t("delete_title"),self.t("delete_note").format(x.title),QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No)==QMessageBox.StandardButton.Yes:self.vault.delete_entry(x.id);self.current=None;self.refresh();self.empty_detail()
     def toggle_theme(self):self.preferences.theme="light" if self.preferences.theme=="dark" else "dark";self.pref_service.save(self.preferences);self.apply_theme();self.show_vault()
